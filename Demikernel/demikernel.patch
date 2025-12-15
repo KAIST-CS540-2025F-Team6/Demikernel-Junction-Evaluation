@@ -1,0 +1,152 @@
+diff --git a/linux.mk b/linux.mk
+index 573bcffa..ae8ffb5f 100644
+--- a/linux.mk
++++ b/linux.mk
+@@ -200,7 +200,7 @@ clean: clean-examples clean-tests clean-libs
+ # Tests
+ #=======================================================================================================================
+ 
+-export CONFIG_PATH ?= $(HOME)/config.yaml
++export CONFIG_PATH ?= $(PWD)/config.yaml
+ export MTU ?= 1500
+ export PEER ?= server
+ export TEST ?= udp-push-pop
+@@ -252,3 +252,38 @@ test-clean:
+ 
+ run-benchmarks-c: all-benchmarks-c $(BINDIR)/syscalls.elf
+ 	timeout $(TIMEOUT_SECONDS) $(BINDIR)/benchmarks.elf
++
++
++#=======================================================================================================================
++# Redis
++#=======================================================================================================================
++
++REDIS_DIR ?= $(CURDIR)/redis
++REDIS_DEP_DIR ?= $(REDIS_DIR)/deps
++REDIS_BIN ?= $(BINDIR)/redis-server.demikernel
++
++redis-deps:
++	$(MAKE) -C $(REDIS_DEP_DIR) \
++	    DEMIKERNEL_REPO_DIR=$(CURDIR) \
++		hdr_histogram hiredis jemalloc linenoise lua
++
++redis: all-libs redis-deps
++	$(MAKE) -C $(REDIS_DIR) \
++	    DEMIKERNEL_REPO_DIR=$(CURDIR)
++
++redis-test:
++	$(MAKE) -C $(REDIS_DIR) \
++	    DEMIKERNEL_REPO_DIR=$(CURDIR) \
++		test
++
++redis-run-server:
++	$(REDIS_DIR)/src/redis-server \
++	    --protected-mode no \
++	    --bind 10.0.4.5 --port 6379 \
++		--loglevel debug \
++		--appendonly no
++
++redis-flush:
++	$(REDIS_DIR)/src/redis-cli \
++	    -n 4 \
++		FLUSHDB
+diff --git a/scripts/build-install-dpdk.sh b/scripts/build-install-dpdk.sh
+index f57f8e44..4a8b410a 100755
+--- a/scripts/build-install-dpdk.sh
++++ b/scripts/build-install-dpdk.sh
+@@ -18,7 +18,7 @@ cd dpdk-22.11
+ mkdir -p build
+ 
+ # Install pre-requisites.
+-pip3 install pyelftools
++sudo apt install python3-pyelftools
+ 
+ # Build and install
+ meson --prefix=$HOME build
+diff --git a/src/catnip/runtime/mod.rs b/src/catnip/runtime/mod.rs
+index 04bea1e9..e1f5c5e1 100644
+--- a/src/catnip/runtime/mod.rs
++++ b/src/catnip/runtime/mod.rs
+@@ -22,15 +22,42 @@ use crate::{
+     runtime::{
+         fail::Fail,
+         libdpdk::{
+-            rte_delay_us_block, rte_eal_init, rte_errno, rte_eth_conf, rte_eth_dev_configure, rte_eth_dev_count_avail,
+-            rte_eth_dev_get_mtu, rte_eth_dev_info_get, rte_eth_dev_is_valid_port, rte_eth_dev_set_mtu,
+-            rte_eth_dev_start, rte_eth_find_next_owned_by, rte_eth_link_get_nowait, rte_eth_promiscuous_enable,
+-            rte_eth_rss_ip, rte_eth_rx_burst, rte_eth_rx_mq_mode_RTE_ETH_MQ_RX_RSS as RTE_ETH_MQ_RX_RSS,
+-            rte_eth_rx_offload_tcp_cksum, rte_eth_rx_offload_udp_cksum, rte_eth_rx_queue_setup, rte_eth_rxconf,
+-            rte_eth_tx_burst, rte_eth_tx_mq_mode_RTE_ETH_MQ_TX_NONE as RTE_ETH_MQ_TX_NONE,
+-            rte_eth_tx_offload_multi_segs, rte_eth_tx_offload_tcp_cksum, rte_eth_tx_offload_udp_cksum,
+-            rte_eth_tx_queue_setup, rte_eth_txconf, rte_mbuf, RTE_ETHER_MAX_JUMBO_FRAME_LEN, RTE_ETHER_MAX_LEN,
+-            RTE_ETH_DEV_NO_OWNER, RTE_ETH_LINK_FULL_DUPLEX, RTE_ETH_LINK_UP, RTE_PKTMBUF_HEADROOM,
++            rte_delay_us_block,
++            rte_eal_init,
++            rte_errno,
++            rte_eth_conf,
++            rte_eth_dev_configure,
++            rte_eth_dev_count_avail,
++            rte_eth_dev_get_mtu,
++            rte_eth_dev_info_get,
++            rte_eth_dev_is_valid_port,
++            rte_eth_dev_set_mtu,
++            rte_eth_dev_start,
++            rte_eth_find_next_owned_by,
++            rte_eth_link_get_nowait,
++            rte_eth_promiscuous_enable,
++            // rte_eth_rss_ip,
++            rte_eth_rx_burst,
++            rte_eth_rx_mq_mode_RTE_ETH_MQ_RX_RSS as RTE_ETH_MQ_RX_RSS,
++            rte_eth_rx_offload_tcp_cksum,
++            rte_eth_rx_offload_udp_cksum,
++            rte_eth_rx_queue_setup,
++            rte_eth_rxconf,
++            rte_eth_tx_burst,
++            rte_eth_tx_mq_mode_RTE_ETH_MQ_TX_NONE as RTE_ETH_MQ_TX_NONE,
++            rte_eth_tx_offload_multi_segs,
++            rte_eth_tx_offload_tcp_cksum,
++            rte_eth_tx_offload_udp_cksum,
++            rte_eth_tx_queue_setup,
++            rte_eth_txconf,
++            rte_mbuf,
++            rte_mempool_avail_count,
++            RTE_ETHER_MAX_JUMBO_FRAME_LEN,
++            RTE_ETHER_MAX_LEN,
++            RTE_ETH_DEV_NO_OWNER,
++            RTE_ETH_LINK_FULL_DUPLEX,
++            RTE_ETH_LINK_UP,
++            RTE_PKTMBUF_HEADROOM,
+         },
+         memory::{DemiBuffer, DemiMemoryAllocator},
+         SharedObject,
+@@ -174,7 +201,7 @@ impl SharedDPDKRuntime {
+             port_conf.rxmode.offloads |= unsafe { rte_eth_rx_offload_udp_cksum() as u64 };
+         }
+         port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
+-        port_conf.rx_adv_conf.rss_conf.rss_hf = unsafe { rte_eth_rss_ip() as u64 } | dev_info.flow_type_rss_offloads;
++        port_conf.rx_adv_conf.rss_conf.rss_hf = dev_info.flow_type_rss_offloads;
+ 
+         port_conf.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
+         if tcp_checksum_offload {
+@@ -339,7 +366,20 @@ impl PhysicalLayer for SharedDPDKRuntime {
+         }
+ 
+         let sent = unsafe { rte_eth_tx_burst(self.port_id, 0, mbufs.as_mut_ptr(), count as u16) };
+-        debug_assert_eq!(sent, 1);
++
++        // If the NIC/PMD could not accept all mbufs, log the transmit shortfall and mempool state.
++        if (sent as usize) != count {
++            warn!("DPDK transmit: rte_eth_tx_burst sent {} of {} mbufs", sent, count);
++
++            // Attempt to log mempool availability to help diagnose whether mbuf pressure correlates
++            // with transmit shortfalls. If the binding is present this will report the number of
++            // available elements in the mempool.
++            let avail = unsafe { rte_mempool_avail_count(self.mem_pool.into_raw()) };
++            warn!("mempool: avail={}", avail);
++        } else {
++            trace!("DPDK transmit: rte_eth_tx_burst sent all {} mbufs", count);
++        }
++
+         Ok(())
+     }
+ 

@@ -1,0 +1,14 @@
+diff --git a/lib/caladan b/lib/caladan
+index 5dccc71..53cc96e 160000
+--- a/lib/caladan
++++ b/lib/caladan
+@@ -1 +1 @@
+-Subproject commit 5dccc71587298ed5fce6c10238749ef685489e5c
++Subproject commit 53cc96e9d274d14eb1bc90a84df260232deb52fb
+diff --git a/lib/glibc b/lib/glibc
+index ef321e2..99fbe90 160000
+--- a/lib/glibc
++++ b/lib/glibc
+@@ -1 +1 @@
+-Subproject commit ef321e23c20eebc6d6fb4044425c00e6df27b05f
++Subproject commit 99fbe90917d77e42822ca238283fb913bc20829a

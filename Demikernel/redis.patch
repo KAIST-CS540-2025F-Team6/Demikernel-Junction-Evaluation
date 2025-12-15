@@ -1,0 +1,853 @@
+diff --git a/deps/hiredis/net.c b/deps/hiredis/net.c
+index 3606f631f..137b75964 100644
+--- a/deps/hiredis/net.c
++++ b/deps/hiredis/net.c
+@@ -48,10 +48,10 @@
+ #include "win32.h"
+ 
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/libos.h>
+-#include <dmtr/sga.h>
+-#include <dmtr/types.h>
+-#include <dmtr/wait.h>
++#include <demi/libos.h>
++#include <demi/sga.h>
++#include <demi/types.h>
++#include <demi/wait.h>
+ #endif
+ 
+ /* Defined in hiredis.c */
+@@ -60,7 +60,7 @@ void __redisSetError(redisContext *c, int type, const char *str);
+ void redisNetClose(redisContext *c) {
+     if (c && c->fd != REDIS_INVALID_FD) {
+ #ifdef __DEMIKERNEL__
+-        dmtr_close(c->fd);
++        demi_close(c->fd);
+ #else
+         close(c->fd);
+ #endif
+@@ -70,27 +70,27 @@ void redisNetClose(redisContext *c) {
+ 
+ ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap) {
+ #ifdef __DEMIKERNEL__
+-    dmtr_qresult_t *qr = (dmtr_qresult_t *)c->privdata;
+-    dmtr_qresult_t new_qr;
++    demi_qresult_t *qr = (demi_qresult_t *)c->privdata;
++    demi_qresult_t new_qr;
+     if (!qr ||
+-        qr->qr_value.sga.sga_segs[0].sgaseg_len == 0 ||
+-        qr->qr_value.sga.sga_segs[0].sgaseg_buf == NULL ||
+-        qr->qr_opcode != DMTR_OPC_POP) {
+-        dmtr_qtoken_t qt;
++        qr->qr_value.sga.segments[0].data_len_bytes == 0 ||
++        qr->qr_value.sga.segments[0].data_buf_ptr == NULL ||
++        qr->qr_opcode != DEMI_OPC_POP) {
++        demi_qtoken_t qt;
+         qr = &new_qr;
+-        int retval = dmtr_pop(&qt, c->fd);
++        int retval = demi_pop(&qt, c->fd);
+         if (retval != 0) {
+             return retval;
+         }
+-        retval = dmtr_wait(qr, qt);
+-        if (qr->qr_value.sga.sga_segs[0].sgaseg_len == 0 ||
+-            qr->qr_value.sga.sga_segs[0].sgaseg_buf == NULL ||
+-            qr->qr_opcode != DMTR_OPC_POP)
++        retval = demi_wait(qr, qt, NULL);
++        if (qr->qr_value.sga.segments[0].data_len_bytes == 0 ||
++            qr->qr_value.sga.segments[0].data_buf_ptr == NULL ||
++            qr->qr_opcode != DEMI_OPC_POP)
+             return 0;
+     }
+-    ssize_t nread = qr->qr_value.sga.sga_segs[0].sgaseg_len;
+-    memcpy(buf, qr->qr_value.sga.sga_segs[0].sgaseg_buf, nread);
+-    dmtr_sgafree(&qr->qr_value.sga);
++    ssize_t nread = qr->qr_value.sga.segments[0].data_len_bytes;
++    memcpy(buf, qr->qr_value.sga.segments[0].data_buf_ptr, nread);
++    demi_sgafree(&qr->qr_value.sga);
+ #else
+     ssize_t nread = recv(c->fd, buf, bufcap, 0);
+ #endif
+@@ -117,19 +117,19 @@ ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap) {
+ ssize_t redisNetWrite(redisContext *c) {
+ #ifdef __DEMIKERNEL__
+     ssize_t nwritten = hi_sdslen(c->obuf);
+-    dmtr_sgarray_t sga = dmtr_sgaalloc(nwritten);
+-    dmtr_qtoken_t qt;
+-    dmtr_qresult_t qr;
++    demi_sgarray_t sga = demi_sgaalloc(nwritten);
++    demi_qtoken_t qt;
++    demi_qresult_t qr;
+     int ret;
+ 
+-    memcpy(sga.sga_segs[0].sgaseg_buf, c->obuf, nwritten);
++    memcpy(sga.segments[0].data_buf_ptr, c->obuf, nwritten);
+ 
+-    if (((ret = dmtr_push(&qt, c->fd, &sga)) != 0 ||
+-         (ret = dmtr_wait(&qr, qt)) != 0) &&
++    if (((ret = demi_push(&qt, c->fd, &sga)) != 0 ||
++         (ret = demi_wait(&qr, qt, NULL)) != 0) &&
+         ret != EAGAIN) {
+         nwritten = ret;
+     }
+-    dmtr_sgafree(&sga);
++    demi_sgafree(&sga);
+ #else
+     ssize_t nwritten = send(c->fd, c->obuf, hi_sdslen(c->obuf), 0);
+ #endif
+@@ -168,7 +168,7 @@ static int redisSetReuseAddr(redisContext *c) {
+ static int redisCreateSocket(redisContext *c, int type) {
+ #ifdef __DEMIKERNEL__
+     redisFD s;
+-    int ret = dmtr_socket(&s, type, SOCK_STREAM, 0);
++    int ret = demi_socket(&s, type, SOCK_STREAM, 0);
+     if (ret != 0) {
+         __redisSetErrorFromErrno(c,REDIS_ERR_IO,NULL);
+         return REDIS_ERR;
+@@ -268,14 +268,14 @@ int redisKeepAlive(redisContext *c, int interval) {
+ }
+ 
+ int redisSetTcpNoDelay(redisContext *c) {
+-#ifndef __DEMIKERNEL__ /* Demikernel never uses TCP no delay */    
++#ifndef __DEMIKERNEL__ /* Demikernel never uses TCP no delay */
+     int yes = 1;
+     if (setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) == -1) {
+         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"setsockopt(TCP_NODELAY)");
+         redisNetClose(c);
+         return REDIS_ERR;
+     }
+-#endif    
++#endif
+     return REDIS_OK;
+ }
+ 
+@@ -499,7 +499,7 @@ static int _redisContextConnectTcp(redisContext *c, const char *addr, int port,
+     for (p = servinfo; p != NULL; p = p->ai_next) {
+ addrretry:
+ #ifdef __DEMIKERNEL__
+-        retval = dmtr_socket(&s, p->ai_family,p->ai_socktype,p->ai_protocol);
++        retval = demi_socket(&s, p->ai_family,p->ai_socktype,p->ai_protocol);
+ #else
+         s = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+ #endif
+@@ -530,7 +530,7 @@ addrretry:
+ 
+             for (b = bservinfo; b != NULL; b = b->ai_next) {
+ #ifdef __DEMIKERNEL__
+-                retval = dmtr_bind(s,b->ai_addr,b->ai_addrlen);
++                retval = demi_bind(s,b->ai_addr,b->ai_addrlen);
+ #else
+                 retval = bind(s,b->ai_addr,b->ai_addrlen);
+ #endif
+@@ -557,14 +557,14 @@ addrretry:
+         memcpy(c->saddr, p->ai_addr, p->ai_addrlen);
+         c->addrlen = p->ai_addrlen;
+ #ifdef __DEMIKERNEL__
+-        dmtr_qtoken_t qt;
+-        dmtr_qresult_t qr;
+-        retval = dmtr_connect(&qt,s,p->ai_addr,p->ai_addrlen);
++        demi_qtoken_t qt;
++        demi_qresult_t qr;
++        retval = demi_connect(&qt,s,p->ai_addr,p->ai_addrlen);
+         if (retval != 0) {
+             redisNetClose(c);
+             continue;
+-        } 
+-        retval = dmtr_wait(&qr, qt);
++        }
++        retval = demi_wait(&qr, qt, NULL);
+         /* Demikernel doesn't use errno but just passes the value back */
+         if (retval != 0) errno = retval;
+ #else
+diff --git a/src/ae.c b/src/ae.c
+index 1b9d50c31..1c1d99bb8 100644
+--- a/src/ae.c
++++ b/src/ae.c
+@@ -67,6 +67,9 @@
+ #endif
+ #endif
+ 
++#ifdef __DEMIKERNEL__
++demi_qresult_t recent_qr;          /* single definition (+ optional init) */
++#endif
+ 
+ aeEventLoop *aeCreateEventLoop(int setsize) {
+     aeEventLoop *eventLoop;
+@@ -168,8 +171,12 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
+     }
+     aeFileEvent *fe = &eventLoop->events[fd];
+ 
+-    if (aeApiAddEvent(eventLoop, fd, mask) == -1)
++    if (aeApiAddEvent(eventLoop, fd, mask) == -1) {
++        printf("error here aeApiAddEvent\n");
++        printf("%p %d %d\n", (void*)eventLoop, fd, mask);
++        fflush(stdout);
+         return AE_ERR;
++    }
+     fe->mask |= mask;
+     if (mask & AE_READABLE) fe->rfileProc = proc;
+     if (mask & AE_WRITABLE) fe->wfileProc = proc;
+diff --git a/src/ae.h b/src/ae.h
+index f1b97bd2e..7013c952e 100644
+--- a/src/ae.h
++++ b/src/ae.h
+@@ -35,7 +35,7 @@
+ 
+ #include "monotonic.h"
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/types.h>
++#include <demi/types.h>
+ #endif
+ 
+ #define AE_OK 0
+@@ -67,7 +67,7 @@ struct aeEventLoop;
+ 
+ /* BIG HACK: We'll just keep the result here for now */
+ #ifdef __DEMIKERNEL__
+-dmtr_qresult_t recent_qr;
++extern demi_qresult_t recent_qr;
+ #endif
+ 
+ /* Types and data structures */
+diff --git a/src/ae_demikernel.c b/src/ae_demikernel.c
+index e05418c29..4ec026695 100644
+--- a/src/ae_demikernel.c
++++ b/src/ae_demikernel.c
+@@ -28,8 +28,10 @@
+  * POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include <dmtr/wait.h>
+-#include <dmtr/libos.h>
++#include <demi/wait.h>
++#include <demi/libos.h>
++
++#include <stdio.h>
+ 
+ typedef struct aeApiState {
+     /* map of fds to mask */
+@@ -37,14 +39,14 @@ typedef struct aeApiState {
+     /* number of qtokens actively in use */
+     size_t num_qtokens;
+     /* list of active qtokens */
+-    dmtr_qtoken_t *qtokens;
++    demi_qtoken_t *qtokens;
+     /* mapping from file descriptor to offset in the qtoken array */
+     int *fd_to_qtoken;
+     /* mapping from qtoken array to file descriptor*/
+     int *qtoken_to_fd;
+     /* fd's with a writable event */
+     int *writable_fd_list;
+-    size_t num_writable_fds;    
++    size_t num_writable_fds;
+ } aeApiState;
+ 
+ static int aeApiCreate(aeEventLoop *eventLoop) {
+@@ -54,7 +56,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
+     /* allocate queue descriptor tracking */
+     state->fd_to_qtoken = zcalloc(sizeof(int) * eventLoop->setsize);
+     state->writable_fd_list = zcalloc(sizeof(int) * eventLoop->setsize);
+-    state->fd_mask_map = zcalloc(sizeof(bool) * eventLoop->setsize);
++    state->fd_mask_map = zcalloc(sizeof(int) * eventLoop->setsize);
+     if (state->fd_to_qtoken == NULL ||
+         state->writable_fd_list == NULL ||
+         state->fd_mask_map == NULL) {
+@@ -80,7 +82,7 @@ static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
+        is not */
+     state->fd_to_qtoken = zrealloc(state->fd_to_qtoken, sizeof(int) * setsize);
+     state->writable_fd_list = zrealloc(state->writable_fd_list, sizeof(int) * setsize);
+-    state->fd_mask_map = zrealloc(state->fd_mask_map, sizeof(bool) * setsize);
++    state->fd_mask_map = zrealloc(state->fd_mask_map, sizeof(int) * setsize);
+     return 0;
+ }
+ 
+@@ -99,14 +101,16 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
+     aeApiState *state = eventLoop->apidata;
+     /* we only allow one event of each type so, check if some of the
+        bits are already set */
++
+     if ((mask & AE_READABLE) && !(state->fd_mask_map[fd] & AE_READABLE)) {
+-        dmtr_qtoken_t qt = 1110; // for debugging
++        demi_qtoken_t qt = 1110; // for debugging
+         int ret = 0;
+         /* BIG HACK: we always use the first queue descriptor for
+            listening, so we know to call accept instead of pop */
+-        if (fd == 0)
+-            ret = dmtr_accept(&qt, fd);
+-        else ret = dmtr_pop(&qt, fd);
++
++        if (fd == 501)
++            ret = demi_accept(&qt, fd);
++        else ret = demi_pop(&qt, fd);
+ 
+         if (ret != 0) return -1;
+ 
+@@ -114,7 +118,7 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
+         int i = state->num_qtokens++;
+ 
+         /* increase the size of the qtoken arrays */
+-        state->qtokens = zrealloc(state->qtokens, sizeof(dmtr_qtoken_t) * state->num_qtokens);
++        state->qtokens = zrealloc(state->qtokens, sizeof(demi_qtoken_t) * state->num_qtokens);
+         state->qtoken_to_fd = zrealloc(state->qtoken_to_fd, sizeof(int) * state->num_qtokens);
+         /* place the qtoken at the end */
+         state->qtokens[i] = qt;
+@@ -156,8 +160,8 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
+             state->fd_to_qtoken[moving_fd] = i;
+         }
+         /* resize the qtoken arrays */
+-        state->qtokens = zrealloc(state->qtokens, sizeof(dmtr_qtoken_t) * state->num_qtokens);
+-        state->qtoken_to_fd = zrealloc(state->qtoken_to_fd, sizeof(int) * state->num_qtokens);        
++        state->qtokens = zrealloc(state->qtokens, sizeof(demi_qtoken_t) * state->num_qtokens);
++        state->qtoken_to_fd = zrealloc(state->qtoken_to_fd, sizeof(int) * state->num_qtokens);
+     }
+ 
+     if ((delmask & AE_WRITABLE) && (state->fd_mask_map[fd] & AE_WRITABLE)) {
+@@ -174,37 +178,37 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
+ 
+ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+     /* Need to stop ignoring tvp once we support wait_any with a time out */
+-    
++
+     aeApiState *state = eventLoop->apidata;
+     int retval = 0, ready_offset = 100;
+-    dmtr_qresult_t *qr = &recent_qr;
++    demi_qresult_t *qr = &recent_qr;
+ 
+     if (state->num_writable_fds > 0) {
+         eventLoop->fired[0].fd = state->writable_fd_list[0];
+         eventLoop->fired[0].mask = AE_WRITABLE;
+     } else if (state->num_qtokens > 0) {
+-        retval = dmtr_wait_any(qr, &ready_offset, state->qtokens, state->num_qtokens);
++        retval = demi_wait_any(qr, &ready_offset, state->qtokens, state->num_qtokens, NULL);
+ 
+-	/* dmtr_wait_any only returns one event at a time */
++	/* demi_wait_any only returns one event at a time */
+ 	if (retval == 0) {
+ 	    int mask = state->fd_mask_map[qr->qr_qd];
+-	    dmtr_qtoken_t qt = 100; // for debugging
+-	    if (qr->qr_opcode == DMTR_OPC_POP) {
+-		/* if no buffer is returned, then there was an error */            
+-		if (qr->qr_value.sga.sga_segs[0].sgaseg_len == 0 ||
+-		    qr->qr_value.sga.sga_segs[0].sgaseg_buf == NULL ||
++	    demi_qtoken_t qt = 100; // for debugging
++	    if (qr->qr_opcode == DEMI_OPC_POP) {
++		/* if no buffer is returned, then there was an error */
++		if (qr->qr_value.sga.segments[0].data_len_bytes == 0 ||
++		    qr->qr_value.sga.segments[0].data_buf_ptr == NULL ||
+ 		    qr->qr_opcode == 5) {
+ 		    state->qtokens[ready_offset] = 0;
+ 		} else {
+-		    retval = dmtr_pop(&qt, qr->qr_qd);
++		    retval = demi_pop(&qt, qr->qr_qd);
+ 		    state->qtokens[ready_offset] = qt;
+ 		}
+-	    } else if (qr->qr_opcode == DMTR_OPC_ACCEPT) {
+-		retval = dmtr_accept(&qt, qr->qr_qd);
++	    } else if (qr->qr_opcode == DEMI_OPC_ACCEPT) {
++		retval = demi_accept(&qt, qr->qr_qd);
+ 		state->qtokens[ready_offset] = qt;
+ 	    }
+ 	    if (retval != 0) {
+-		/* Not sure if this is the right way to indicate an error */            
++		/* Not sure if this is the right way to indicate an error */
+ 		panic("aeApiPoll: waitany, %s", strerror(retval));
+ 	    }
+ 	    eventLoop->fired[0].fd = qr->qr_qd;
+diff --git a/src/anet.c b/src/anet.c
+index 295747f68..6130b405e 100644
+--- a/src/anet.c
++++ b/src/anet.c
+@@ -50,7 +50,7 @@
+ #include "config.h"
+ 
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/libos.h>
++#include <demi/libos.h>
+ #endif
+ 
+ #define UNUSED(x) (void)(x)
+@@ -78,7 +78,7 @@ int anetSetBlock(char *err, int fd, int non_block) {
+         return ANET_ERR;
+     }
+ 
+-    /* Check if this flag has been set or unset, if so, 
++    /* Check if this flag has been set or unset, if so,
+      * then there is no need to call fcntl to set/unset it again. */
+     if (!!(flags & O_NONBLOCK) == !!non_block)
+         return ANET_OK;
+@@ -104,8 +104,8 @@ int anetBlock(char *err, int fd) {
+     return anetSetBlock(err,fd,0);
+ }
+ 
+-/* Enable the FD_CLOEXEC on the given fd to avoid fd leaks. 
+- * This function should be invoked for fd's on specific places 
++/* Enable the FD_CLOEXEC on the given fd to avoid fd leaks.
++ * This function should be invoked for fd's on specific places
+  * where fork + execve system calls are called. */
+ int anetCloexec(int fd) {
+     int r;
+@@ -419,7 +419,7 @@ int anetUnixGenericConnect(char *err, const char *path, int flags)
+ 
+ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
+ #ifdef __DEMIKERNEL__
+-    int ret = dmtr_bind(s,sa,len);
++    int ret = demi_bind(s,sa,len);
+     if (ret != 0) {
+         anetSetError(err, "bind: %s", strerror(ret));
+         close(s);
+@@ -434,7 +434,7 @@ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int
+ #endif
+ 
+ #ifdef __DEMIKERNEL__
+-    ret = dmtr_listen(s, backlog);
++    ret = demi_listen(s, backlog);
+     if (ret != 0) {
+         anetSetError(err, "listen: %s", strerror(ret));
+         close(s);
+@@ -486,7 +486,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
+     }
+     for (p = servinfo; p != NULL; p = p->ai_next) {
+ #ifdef __DEMIKERNEL__
+-        dmtr_socket(&s, p->ai_family,p->ai_socktype,p->ai_protocol);
++        demi_socket(&s, p->ai_family,p->ai_socktype,p->ai_protocol);
+ #else
+         s = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+ #endif
+@@ -615,9 +615,9 @@ int anetFdToString(int fd, char *ip, size_t ip_len, int *port, int fd_to_str_typ
+ 
+ #ifdef __DEMIKERNEL__
+     if (fd_to_str_type == FD_TO_PEER_NAME) {
+-        //if (dmtr_getpeername(fd, (struct sockaddr *)&sa, &salen) == -1) goto error;
++        //if (demi_getpeername(fd, (struct sockaddr *)&sa, &salen) == -1) goto error;
+     } else {
+-        //if (dmtr_getsockname(fd, (struct sockaddr *)&sa, &salen) == -1) goto error;
++        //if (demi_getsockname(fd, (struct sockaddr *)&sa, &salen) == -1) goto error;
+     }
+ #else
+     if (fd_to_str_type == FD_TO_PEER_NAME) {
+diff --git a/src/demikernel.c b/src/demikernel.c
+index 0055e516d..b4973dc0f 100644
+--- a/src/demikernel.c
++++ b/src/demikernel.c
+@@ -29,8 +29,9 @@
+ 
+ #include "server.h"
+ #include "connhelpers.h"
+-#include <dmtr/sga.h>
+-#include <dmtr/wait.h>
++#include <demi/sga.h>
++#include <demi/wait.h>
++#include <stdio.h>
+ 
+ ConnectionType CT_DemiSocket;
+ 
+@@ -38,7 +39,7 @@ connection *connCreateDemikernelSocket() {
+     connection *conn = zcalloc(sizeof(connection));
+     conn->type = &CT_DemiSocket;
+     conn->fd = -1;
+-    conn->private_data = zcalloc(sizeof(dmtr_qresult_t));
++    conn->private_data = zcalloc(sizeof(demi_qresult_t));
+     return conn;
+ }
+ 
+@@ -46,7 +47,7 @@ connection *connCreateAcceptedDemiQ(int fd) {
+     connection *conn = connCreateDemikernelSocket();
+     conn->fd = fd;
+     conn->state = CONN_STATE_ACCEPTING;
+-    
++
+     return conn;
+ }
+ 
+@@ -95,30 +96,30 @@ static void demiSocketClose(connection *conn) {
+ }
+ 
+ static int demiSocketWrite(connection *conn, const void *data, size_t data_len) {
+-    dmtr_sgarray_t sga = dmtr_sgaalloc(data_len);
+-    dmtr_qtoken_t qt;
+-    dmtr_qresult_t qr;
++    demi_sgarray_t sga = demi_sgaalloc(data_len);
++    demi_qtoken_t qt;
++    demi_qresult_t qr;
+     int ret;
+-    
+-    memcpy(sga.sga_segs[0].sgaseg_buf, data, data_len);
+ 
+-    if (((ret = dmtr_push(&qt, conn->fd, &sga)) != 0 ||
+-         (ret = dmtr_wait(&qr, qt)) != 0 ||
+-         qr.qr_opcode != DMTR_OPC_PUSH) &&
++    memcpy(sga.segments[0].data_buf_ptr, data, data_len);
++
++    if (((ret = demi_push(&qt, conn->fd, &sga)) != 0 ||
++         (ret = demi_wait(&qr, qt, NULL)) != 0 ||
++         qr.qr_opcode != DEMI_OPC_PUSH) &&
+         ret != EAGAIN) {
+         conn->last_errno = ret;
+         return -1;
+     }
+ 
+-    dmtr_sgafree(&sga);
++    demi_sgafree(&sga);
+     return data_len;
+ }
+ 
+ static int demiSocketWritev(connection *conn, const struct iovec *iov, int iovcnt) {
+     size_t data_len = 0;
+-    dmtr_sgarray_t sga;
+-    dmtr_qtoken_t qt;
+-    dmtr_qresult_t qr;
++    demi_sgarray_t sga;
++    demi_qtoken_t qt;
++    demi_qresult_t qr;
+     int ret;
+ 
+     printf("Sending ev: \n");
+@@ -126,32 +127,32 @@ static int demiSocketWritev(connection *conn, const struct iovec *iov, int iovcn
+     for (int i = 0; i < iovcnt; i++) {
+         data_len += iov[i].iov_len;
+     }
+-    sga = dmtr_sgaalloc(data_len);
++    sga = demi_sgaalloc(data_len);
+ 
+-    char *offset = (char *)sga.sga_segs[0].sgaseg_buf;
++    char *offset = (char *)sga.segments[0].data_buf_ptr;
+     for (int i = 0; i < iovcnt; i++) {
+         memcpy(offset, iov[i].iov_base, iov[i].iov_len);
+         offset += iov[i].iov_len;
+     }
+-    
+-    if (((ret = dmtr_push(&qt, conn->fd, &sga)) != 0 ||
+-         (ret = dmtr_wait(&qr, qt)) != 0) &&
++
++    if (((ret = demi_push(&qt, conn->fd, &sga)) != 0 ||
++         (ret = demi_wait(&qr, qt, NULL)) != 0) &&
+         errno != EAGAIN) {
+         conn->last_errno = ret;
+         return -1;
+     }
+-    dmtr_sgafree(&sga);
++    demi_sgafree(&sga);
+     return data_len;
+ }
+ 
+ static int demiSocketRead(connection *conn, void *buf, size_t buf_len) {
+     /* We're storing the result from the last wait in a global variable */
+-    dmtr_qresult_t *qr = &recent_qr;
++    demi_qresult_t *qr = &recent_qr;
+     UNUSED(conn);
+ 
+-    if (qr->qr_value.sga.sga_segs[0].sgaseg_len == 0 ||
+-        qr->qr_value.sga.sga_segs[0].sgaseg_buf == NULL ||
+-        qr->qr_opcode != DMTR_OPC_POP) {
++    if (qr->qr_value.sga.segments[0].data_len_bytes == 0 ||
++        qr->qr_value.sga.segments[0].data_buf_ptr == NULL ||
++        qr->qr_opcode != DEMI_OPC_POP) {
+         //        conn->state = CONN_STATE_CLOSED;
+         return 0;
+     }
+@@ -167,14 +168,14 @@ static int demiSocketRead(connection *conn, void *buf, size_t buf_len) {
+     /* } */
+ 
+     /* Irene: Assume only one scatter gather element */
+-    size_t read_len = qr->qr_value.sga.sga_segs[0].sgaseg_len;
++    size_t read_len = qr->qr_value.sga.segments[0].data_len_bytes;
+     if (read_len > buf_len) {
+         // panic?
+     } else {
+-        memcpy(buf, qr->qr_value.sga.sga_segs[0].sgaseg_buf, read_len);
++        memcpy(buf, qr->qr_value.sga.segments[0].data_buf_ptr, read_len);
+     }
+     //Irene: Use memory freely for debugging
+-    //dmtr_sgafree(&qr->qr_value.sga);
++    //demi_sgafree(&qr->qr_value.sga);
+     return read_len;
+ }
+ 
+@@ -192,7 +193,7 @@ static int demiSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
+ }
+ 
+ /* We probably don't need a Demikernel specific function but the conn
+-   function is not available here */ 
++   function is not available here */
+ static int demiSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
+     if (func == conn->write_handler) return C_OK;
+ 
+diff --git a/src/networking.c b/src/networking.c
+index 388c2d7c1..2ccc3a1d2 100644
+--- a/src/networking.c
++++ b/src/networking.c
+@@ -37,7 +37,7 @@
+ #include <ctype.h>
+ 
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/libos.h>
++#include <demi/libos.h>
+ #include <arpa/inet.h>
+ #endif
+ 
+@@ -552,7 +552,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
+         int panic_in_replicas = (ctype == CLIENT_TYPE_MASTER && server.repl_slave_ro)
+             && (server.propagation_error_behavior == PROPAGATION_ERR_BEHAVIOR_PANIC ||
+             server.propagation_error_behavior == PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS);
+-        int panic_in_aof = c->id == CLIENT_ID_AOF 
++        int panic_in_aof = c->id == CLIENT_ID_AOF
+             && server.propagation_error_behavior == PROPAGATION_ERR_BEHAVIOR_PANIC;
+         if (panic_in_replicas || panic_in_aof) {
+             serverPanic("This %s panicked sending an error to its %s"
+@@ -1356,7 +1356,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+ #ifdef __DEMIKERNEL__
+ void acceptDemikernelHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+     /* BAD HACK: grab the result from the first fired event */
+-    dmtr_qresult_t *qr = &recent_qr;//&el->fired[0].qr;
++    demi_qresult_t *qr = &recent_qr;//&el->fired[0].qr;
+     int cfd = qr->qr_value.ares.qd;
+     struct sockaddr_in *s = &qr->qr_value.ares.addr;
+     char cip[NET_IP_STR_LEN];
+@@ -1821,7 +1821,7 @@ static int _writevToClient(client *c, ssize_t *nwritten) {
+     struct iovec iov[IOV_MAX];
+     int iovcnt = 0;
+     size_t iov_bytes_len = 0;
+-    /* If the static reply buffer is not empty, 
++    /* If the static reply buffer is not empty,
+      * add it to the iov array for writev() as well. */
+     if (c->bufpos > 0) {
+         iov[iovcnt].iov_base = c->buf + c->sentlen;
+@@ -1937,7 +1937,7 @@ int _writeToClient(client *c, ssize_t *nwritten) {
+             c->bufpos = 0;
+             c->sentlen = 0;
+         }
+-    } 
++    }
+ 
+     return C_OK;
+ }
+@@ -3197,8 +3197,8 @@ NULL
+                 type = CLIENT_PAUSE_ALL;
+             } else {
+                 addReplyError(c,
+-                    "CLIENT PAUSE mode must be WRITE or ALL");  
+-                return;       
++                    "CLIENT PAUSE mode must be WRITE or ALL");
++                return;
+             }
+         }
+ 
+@@ -3385,7 +3385,7 @@ NULL
+             numflags++;
+             if (c->flags & CLIENT_TRACKING_CACHING) {
+                 addReplyBulkCString(c,"caching-yes");
+-                numflags++;        
++                numflags++;
+             }
+         }
+         if (c->flags & CLIENT_TRACKING_OPTOUT) {
+@@ -3393,7 +3393,7 @@ NULL
+             numflags++;
+             if (c->flags & CLIENT_TRACKING_CACHING) {
+                 addReplyBulkCString(c,"caching-no");
+-                numflags++;        
++                numflags++;
+             }
+         }
+         if (c->flags & CLIENT_TRACKING_NOLOOP) {
+@@ -3650,7 +3650,7 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
+             repl_node_num = last->id - cur->id + 1;
+         }
+         return repl_buf_size + (repl_node_size*repl_node_num);
+-    } else { 
++    } else {
+         size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
+         return c->reply_bytes + (list_item_size*listLength(c->reply));
+     }
+@@ -3907,7 +3907,7 @@ void unblockPostponedClients() {
+  * A main use case of this function is to allow pausing replication traffic
+  * so that a failover without data loss to occur. Replicas will continue to receive
+  * traffic to facilitate this functionality.
+- * 
++ *
+  * This function is also internally used by Redis Cluster for the manual
+  * failover procedure implemented by CLUSTER FAILOVER.
+  *
+@@ -3944,13 +3944,13 @@ void unpauseClients(pause_purpose purpose) {
+     updateClientPauseTypeAndEndTime();
+ }
+ 
+-/* Returns true if clients are paused and false otherwise. */ 
++/* Returns true if clients are paused and false otherwise. */
+ int areClientsPaused(void) {
+     return server.client_pause_type != CLIENT_PAUSE_OFF;
+ }
+ 
+ /* Checks if the current client pause has elapsed and unpause clients
+- * if it has. Also returns true if clients are now paused and false 
++ * if it has. Also returns true if clients are now paused and false
+  * otherwise. */
+ int checkClientPauseTimeoutAndReturnIfPaused(void) {
+     if (!areClientsPaused())
+diff --git a/src/redis-benchmark.c b/src/redis-benchmark.c
+index 18fea9076..d6a2e7ac4 100644
+--- a/src/redis-benchmark.c
++++ b/src/redis-benchmark.c
+@@ -73,7 +73,7 @@
+ #define SHOW_THROUGHPUT_INTERVAL 250  /* 250ms */
+ 
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/libos.h>
++#include <demi/libos.h>
+ #endif
+ 
+ #define CLIENT_GET_EVENTLOOP(c) \
+@@ -1786,7 +1786,8 @@ int main(int argc, char **argv) {
+ #endif
+ 
+ #ifdef __DEMIKERNEL__
+-        dmtr_init(0, NULL);
++        struct demi_args dargs = {0};
++        assert(demi_init(&dargs) == 0);
+ #endif
+ 
+     if (config.cluster_mode) {
+diff --git a/src/server.c b/src/server.c
+index 6148fef98..47ffca9c5 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -1336,7 +1336,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+      * a higher frequency. */
+     run_with_period(1000) {
+         if ((server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) &&
+-            server.aof_last_write_status == C_ERR) 
++            server.aof_last_write_status == C_ERR)
+             {
+                 flushAppendOnlyFile(0);
+             }
+@@ -1346,8 +1346,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+     checkClientPauseTimeoutAndReturnIfPaused();
+ 
+     /* Replication cron function -- used to reconnect to master,
+-     * detect transfer failures, start background RDB transfers and so forth. 
+-     * 
++     * detect transfer failures, start background RDB transfers and so forth.
++     *
+      * If Redis is trying to failover then run the replication cron faster so
+      * progress on the handshake happens more quickly. */
+     if (server.failover_state != NO_FAILOVER) {
+@@ -1576,7 +1576,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
+      * processUnblockedClients(), so if there are multiple pipelined WAITs
+      * and the just unblocked WAIT gets blocked again, we don't have to wait
+      * a server cron cycle in absence of other event loop events. See #6623.
+-     * 
++     *
+      * We also don't send the ACKs while clients are paused, since it can
+      * increment the replication backlog, they'll be sent after the pause
+      * if we are still the master. */
+@@ -1586,7 +1586,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
+     }
+ 
+     /* We may have received updates from clients about their current offset. NOTE:
+-     * this can't be done where the ACK is received since failover will disconnect 
++     * this can't be done where the ACK is received since failover will disconnect
+      * our clients. */
+     updateFailoverStatus();
+ 
+@@ -2241,6 +2241,7 @@ int createSocketAcceptHandler(socketFds *sfd, aeFileProc *accept_handler) {
+         connection *conn = connCreateListeningSocket(sfd->fd[j]);
+         if (aeCreateFileEvent(server.el, sfd->fd[j], AE_READABLE, accept_handler,conn) == AE_ERR) {
+             /* Rollback */
++            printf("cc\n");
+             for (j = j-1; j >= 0; j--) aeDeleteFileEvent(server.el, sfd->fd[j], AE_READABLE);
+             return C_ERR;
+         }
+@@ -3046,7 +3047,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
+     if (!shouldPropagate(target))
+         return;
+ 
+-    /* This needs to be unreachable since the dataset should be fixed during 
++    /* This needs to be unreachable since the dataset should be fixed during
+      * client pause, otherwise data may be lost during a failover. */
+     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
+ 
+@@ -3898,13 +3899,13 @@ int processCommand(client *c) {
+ 
+     /* If the server is paused, block the client until
+      * the pause has ended. Replicas are never paused. */
+-    if (!(c->flags & CLIENT_SLAVE) && 
++    if (!(c->flags & CLIENT_SLAVE) &&
+         ((server.client_pause_type == CLIENT_PAUSE_ALL) ||
+         (server.client_pause_type == CLIENT_PAUSE_WRITE && is_may_replicate_command)))
+     {
+         c->bpop.timeout = 0;
+         blockClient(c,BLOCKED_POSTPONE);
+-        return C_OK;       
++        return C_OK;
+     }
+ 
+     /* Exec the command */
+@@ -7025,7 +7026,7 @@ int main(int argc, char **argv) {
+     }
+ 
+ #ifdef __DEMIKERNEL__
+-    dmtr_init(0, NULL);
++    assert(demi_init(NULL) == 0);
+ #endif
+ 
+     initServer();
+diff --git a/src/server.h b/src/server.h
+index 453106bb4..322d938c0 100644
+--- a/src/server.h
++++ b/src/server.h
+@@ -65,7 +65,7 @@ typedef long long mstime_t; /* millisecond time type. */
+ typedef long long ustime_t; /* microsecond time type. */
+ 
+ #ifdef __DEMIKERNEL__
+-#include <dmtr/libos.h>
++#include <demi/libos.h>
+ #endif
+ 
+ #include "ae.h"      /* Event driven programming library */
+@@ -272,7 +272,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
+                                   * from the value of the key. */
+ /* Other flags: */
+ #define CMD_KEY_NOT_KEY (1ULL<<8)     /* A 'fake' key that should be routed
+-                                       * like a key in cluster mode but is 
++                                       * like a key in cluster mode but is
+                                        * excluded from other key checks. */
+ #define CMD_KEY_INCOMPLETE (1ULL<<9)  /* Means that the keyspec might not point
+                                        * out to all keys it should cover */
+@@ -790,7 +790,7 @@ typedef struct RedisModuleIO {
+     struct RedisModuleCtx *ctx; /* Optional context, see RM_GetContextFromIO()*/
+     struct redisObject *key;    /* Optional name of key processed */
+     int dbid;            /* The dbid of the key being processed, -1 when unknown. */
+-} RedisModuleIO;       
++} RedisModuleIO;
+ 
+ /* Macro to initialize an IO context. Note that the 'ver' field is populated
+  * inside rdb.c according to the version of the value to load. */
+@@ -890,7 +890,7 @@ typedef struct clientReplyBlock {
+  *      |                                           /         \
+  *      |                                          /           \
+  *  Repl Backlog                               Replia_A      Replia_B
+- * 
++ *
+  * Each replica or replication backlog increments only the refcount of the
+  * 'ref_repl_buf_node' which it points to. So when replica walks to the next
+  * node, it should first increase the next node's refcount, and when we trim
+@@ -1224,8 +1224,8 @@ struct sharedObjectsStruct {
+     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
+     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
+     *rpop, *lpop, *lpush, *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax,
+-    *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
+-    *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, 
++    *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,
++    *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire,
+     *time, *pxat, *absttl, *retrycount, *force, *justid, *entriesread,
+     *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
+     *getack, *special_asterick, *special_equals, *default_username, *redacted,
+@@ -3006,7 +3006,7 @@ sds keyspaceEventsFlagsToString(int flags);
+ 
+ /* Configuration */
+ /* Configuration Flags */
+-#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard 
++#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard
+                              * config, which is mutable. */
+ #define IMMUTABLE_CONFIG (1ULL<<0) /* Can this value only be set at startup? */
+ #define SENSITIVE_CONFIG (1ULL<<1) /* Does this value contain sensitive information */
